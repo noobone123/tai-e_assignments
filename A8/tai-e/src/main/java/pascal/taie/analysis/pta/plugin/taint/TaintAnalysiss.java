@@ -28,11 +28,17 @@ import pascal.taie.World;
 import pascal.taie.analysis.pta.PointerAnalysisResult;
 import pascal.taie.analysis.pta.core.cs.context.Context;
 import pascal.taie.analysis.pta.core.cs.element.CSManager;
+import pascal.taie.analysis.pta.core.cs.element.CSObj;
+import pascal.taie.analysis.pta.core.cs.element.CSVar;
+import pascal.taie.analysis.pta.core.heap.Obj;
 import pascal.taie.analysis.pta.cs.Solver;
+import pascal.taie.ir.stmt.Invoke;
+import pascal.taie.language.classes.JMethod;
+import pascal.taie.language.classes.Signatures;
+import pascal.taie.language.classes.Subsignature;
+import pascal.taie.language.type.Type;
 
-import java.util.Map;
-import java.util.Set;
-import java.util.TreeSet;
+import java.util.*;
 
 public class TaintAnalysiss {
 
@@ -48,6 +54,9 @@ public class TaintAnalysiss {
 
     private final Context emptyContext;
 
+    /* Each Signature may hit multiple transfers */
+    private final Map<Subsignature, Set<TaintTransfer>> sigToTransfers = new HashMap<>();
+
     public TaintAnalysiss(Solver solver) {
         manager = new TaintManager();
         this.solver = solver;
@@ -58,9 +67,56 @@ public class TaintAnalysiss {
                 World.get().getClassHierarchy(),
                 World.get().getTypeSystem());
         logger.info(config);
+
+        for (var transfer : config.getTransfers()) {
+            var sig = transfer.method().getSubsignature();
+            sigToTransfers.computeIfAbsent(sig, k -> new HashSet<>()).add(transfer);
+        }
     }
 
-    // TODO - finish me
+    public boolean isTaintSource(JMethod method, Type type) {
+        var s = new Source(method, type);
+        return config.getSources().contains(s);
+    }
+
+    public void handleTaintTransfer(JMethod method, Invoke invoke, Context callSiteCtx, CSVar base) {
+        var transfers = sigToTransfers.get(method.getSubsignature());
+        if (transfers == null) return;
+        for (var transfer : transfers) {
+            // case: arg-to-result
+            if (transfer.from() >= 0 && transfer.to() == TaintTransfer.RESULT) {
+                var receiver = invoke.getLValue();
+                if (receiver != null) {
+                    var csReceiver = csManager.getCSVar(callSiteCtx, receiver);
+                    var arg = csManager.getCSVar(callSiteCtx, invoke.getInvokeExp().getArg(transfer.from()));
+                    solver.addTFGEdge(arg, csReceiver);
+                }
+            }
+            // case: arg-to-base
+            if (transfer.from() >= 0 && transfer.to() == TaintTransfer.BASE) {
+                if (base != null) {
+                    var arg = csManager.getCSVar(callSiteCtx, invoke.getInvokeExp().getArg(transfer.from()));
+                    solver.addTFGEdge(arg, base);
+                }
+            }
+            // case: base-to-result
+            if (transfer.from() == TaintTransfer.BASE && transfer.to() == TaintTransfer.RESULT) {
+                var receiver = invoke.getLValue();
+                if (receiver != null) {
+                    var csReceiver = csManager.getCSVar(callSiteCtx, receiver);
+                    solver.addTFGEdge(base, csReceiver);
+                }
+            }
+        }
+    }
+
+    public boolean isTaintObj(Obj obj) {
+        return manager.isTaint(obj);
+    }
+
+    public Obj getTaintedObj(Invoke stmt, Type type) {
+        return manager.makeTaint(stmt, type);
+    }
 
     public void onFinish() {
         Set<TaintFlow> taintFlows = collectTaintFlows();
@@ -70,8 +126,32 @@ public class TaintAnalysiss {
     private Set<TaintFlow> collectTaintFlows() {
         Set<TaintFlow> taintFlows = new TreeSet<>();
         PointerAnalysisResult result = solver.getResult();
-        // TODO - finish me
-        // You could query pointer analysis results you need via variable result.
+
+        var csCallGraph = result.getCSCallGraph();
+        csCallGraph.edges().forEach(edge -> {
+            var csCallSite = edge.getCallSite();
+            var csCallee = edge.getCallee();
+
+            var callerCtx = csCallSite.getContext();
+            var args = csCallSite.getCallSite().getInvokeExp().getArgs();
+            for (int i = 0; i < args.size(); i++) {
+                var arg = args.get(i);
+                var csArg = csManager.getCSVar(callerCtx, arg);
+                var pointsTo = result.getPointsToSet(csArg);
+                for (var obj : pointsTo) {
+                    if (isTaintObj(obj.getObject())) {
+                        var taintSink = new Sink(csCallee.getMethod(), i);
+                        if (config.getSinks().contains(taintSink)) {
+                            taintFlows.add(new TaintFlow(
+                                    manager.getSourceCall(obj.getObject()),
+                                    csCallSite.getCallSite(), i
+                            ));
+                        }
+                    }
+                }
+            }
+        });
+
         return taintFlows;
     }
 }

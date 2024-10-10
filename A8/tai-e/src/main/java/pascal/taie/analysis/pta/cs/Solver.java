@@ -62,8 +62,29 @@ import pascal.taie.ir.stmt.StoreField;
 import pascal.taie.language.classes.JField;
 import pascal.taie.language.classes.JMethod;
 import pascal.taie.language.type.Type;
+import pascal.taie.util.collection.Maps;
+import pascal.taie.util.collection.MultiMap;
+
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
 
 public class Solver {
+
+    // Enhanced Pointer Flow Graph add taint transfer edges for original PFG
+    static class EnhancedPFG extends PointerFlowGraph {
+        private final MultiMap<Pointer, Pointer> taintTransferSuccs = Maps.newMultiMap();
+
+        boolean addTFGEdge(Pointer source, Pointer target) {
+            return taintTransferSuccs.put(source, target);
+        }
+
+        Set<Pointer> getTaintTransferSuccsOf(Pointer source) {
+            return taintTransferSuccs.get(source);
+        }
+    }
+
 
     private static final Logger logger = LogManager.getLogger(Solver.class);
 
@@ -77,7 +98,7 @@ public class Solver {
 
     private CSCallGraph callGraph;
 
-    private PointerFlowGraph pointerFlowGraph;
+    private EnhancedPFG ePFG;
 
     private WorkList workList;
 
@@ -113,7 +134,7 @@ public class Solver {
     private void initialize() {
         csManager = new MapBasedCSManager();
         callGraph = new CSCallGraph(csManager);
-        pointerFlowGraph = new PointerFlowGraph();
+        ePFG = new EnhancedPFG();
         workList = new WorkList();
         taintAnalysis = new TaintAnalysiss(this);
         // process program entry, i.e., main method
@@ -128,7 +149,11 @@ public class Solver {
      * Processes new reachable context-sensitive method.
      */
     private void addReachable(CSMethod csMethod) {
-        // TODO - finish me
+        if (!callGraph.addReachableMethod(csMethod)) return;
+
+        csMethod.getMethod().getIR().getStmts().forEach(
+                stmt -> stmt.accept(new StmtProcessor(csMethod))
+        );
     }
 
     /**
@@ -145,22 +170,161 @@ public class Solver {
             this.context = csMethod.getContext();
         }
 
-        // TODO - if you choose to implement addReachable()
-        //  via visitor pattern, then finish me
+        public Void visit(New stmt) {
+            var lVar = stmt.getLValue();
+            var csVar = csManager.getCSVar(context, lVar);
+            var obj = heapModel.getObj(stmt);
+            var csObj = csManager.getCSObj(
+                    contextSelector.selectHeapContext(csMethod, obj),
+                    obj
+            );
+            var pts = PointsToSetFactory.make(csObj);
+            /* For Debugging */
+            // System.out.println("New: " + pointer + " -> " + pts);
+            workList.addEntry(csVar, pts);
+            return null;
+        }
+
+        public Void visit(Copy stmt) {
+            var cslVar = csManager.getCSVar(context, stmt.getLValue());
+            var csrVar = csManager.getCSVar(context, stmt.getRValue());
+            addPFGEdge(csrVar, cslVar);
+            return null;
+        }
+
+        public Void visit(LoadField stmt) {
+            if (!stmt.isStatic()) {
+                return null;
+            }
+            var cslVar = csManager.getCSVar(context, stmt.getLValue());
+            var loadField = stmt.getFieldRef().resolve();
+            addPFGEdge(csManager.getStaticField(loadField), cslVar);
+            return null;
+        }
+
+        public Void visit(StoreField stmt) {
+            if (!stmt.isStatic()) {
+                return null;
+            }
+            var csrVar = csManager.getCSVar(context, stmt.getRValue());
+            var storeField = stmt.getFieldRef().resolve();
+            addPFGEdge(csrVar, csManager.getStaticField(storeField));
+            return null;
+        }
+
+        public Void visit(Invoke stmt) {
+            if (!stmt.isStatic()) {
+                return null;
+            }
+
+            var csCallSite = csManager.getCSCallSite(context, stmt);
+            var callee = resolveCallee(null, stmt);
+            var calleeCtx = contextSelector.selectContext(csCallSite, callee);
+            var csCallee = csManager.getCSMethod(calleeCtx, callee);
+
+            // handling taint object
+            if (taintAnalysis.isTaintSource(callee, callee.getReturnType())) {
+                logger.info("Found Taint source: {}", callee);
+                var taintObj = taintAnalysis.getTaintedObj(stmt, callee.getReturnType());
+                var csTaintObj = csManager.getCSObj(contextSelector.getEmptyContext(), taintObj);
+                var pts = PointsToSetFactory.make(csTaintObj);
+                var lVar = stmt.getResult();
+                workList.addEntry(
+                        csManager.getCSVar(context, lVar),
+                        pts
+                );
+            }
+
+            taintAnalysis.handleTaintTransfer(callee, stmt, context, null);
+            handleCall(stmt, csCallSite, csCallee);
+            return null;
+        }
     }
 
     /**
      * Adds an edge "source -> target" to the PFG.
      */
     private void addPFGEdge(Pointer source, Pointer target) {
-        // TODO - finish me
+        if (ePFG.addEdge(source, target)) {
+            if (!source.getPointsToSet().isEmpty()) {
+                workList.addEntry(target, source.getPointsToSet());
+            }
+        }
+    }
+
+    public void addTFGEdge(Pointer source, Pointer target) {
+        if (ePFG.addTFGEdge(source, target)) {
+            var taintObjSet = getDifferentObjSet(source.getPointsToSet()).get("taint");
+            if (!taintObjSet.isEmpty()) {
+                workList.addEntry(target, taintObjSet);
+            }
+        }
     }
 
     /**
      * Processes work-list entries until the work-list is empty.
      */
     private void analyze() {
-        // TODO - finish me
+        while (!workList.isEmpty()) {
+            var entry = workList.pollEntry();
+            var deltaSet = propagate(entry.pointer(), entry.pointsToSet());
+
+            if (deltaSet == null) {
+                continue;
+            }
+
+            var objSetMap = getDifferentObjSet(deltaSet);
+            var taintObjSet = objSetMap.get("taint");
+            var heapObjSet = objSetMap.get("heap");
+            propagateTaintTransfer(entry.pointer(), taintObjSet);
+
+            if (entry.pointer() instanceof CSVar csVar) {
+                var var = csVar.getVar();
+                // Taint Object is just an abstract notation, so we only need to process heap objects here.
+                // process store fields
+                for (var obj : heapObjSet) {
+                    for (var stmt : var.getStoreFields()) {
+                        var storeField = stmt.getFieldRef().resolve();
+                        var rVar = stmt.getRValue();
+                        addPFGEdge(
+                                csManager.getCSVar(csVar.getContext(), rVar),
+                                csManager.getInstanceField(obj, storeField)
+                        );
+                    }
+
+                    // process load fields
+                    for (var stmt : var.getLoadFields()) {
+                        var loadField = stmt.getFieldRef().resolve();
+                        var lVar = stmt.getLValue();
+                        addPFGEdge(
+                                csManager.getInstanceField(obj, loadField),
+                                csManager.getCSVar(csVar.getContext(), lVar)
+                        );
+                    }
+
+                    // process store arrays
+                    for (var stmt : var.getStoreArrays()) {
+                        var rVar = stmt.getRValue();
+                        addPFGEdge(
+                                csManager.getCSVar(csVar.getContext(), rVar),
+                                csManager.getArrayIndex(obj)
+                        );
+                    }
+
+                    // process load arrays
+                    for (var stmt : var.getLoadArrays()) {
+                        var lVar = stmt.getLValue();
+                        addPFGEdge(
+                                csManager.getArrayIndex(obj),
+                                csManager.getCSVar(csVar.getContext(), lVar)
+                        );
+                    }
+
+                    // process invokes
+                    processCall(csVar, obj);
+                }
+            }
+        }
     }
 
     /**
@@ -168,8 +332,38 @@ public class Solver {
      * returns the difference set of pointsToSet and pt(pointer).
      */
     private PointsToSet propagate(Pointer pointer, PointsToSet pointsToSet) {
-        // TODO - finish me
-        return null;
+        var deltaSet = PointsToSetFactory.make();
+        var ptSet = pointer.getPointsToSet();
+        for (var obj : pointsToSet) {
+            if (ptSet.contains(obj)) {
+                continue;
+            } else {
+                deltaSet.addObject(obj);
+            }
+        }
+
+        // Propagate both heap objects and taint objects along the normal PFG edges.
+        if (!deltaSet.isEmpty()) {
+            for (var obj : deltaSet) {
+                ptSet.addObject(obj);
+            }
+            for (var succ : ePFG.getSuccsOf(pointer)) {
+                workList.addEntry(succ, deltaSet);
+            }
+            return deltaSet;
+        } else {
+            return null;
+        }
+    }
+
+    // We have already propagated taint objects in the normal PFG edges,
+    // Now these taint objects should also be propagated in the taint transfer edges.
+    private void propagateTaintTransfer(Pointer pointer, PointsToSet taintObjSet) {
+        if (!taintObjSet.isEmpty()) {
+            for (var succ : ePFG.getTaintTransferSuccsOf(pointer)) {
+                workList.addEntry(succ, taintObjSet);
+            }
+        }
     }
 
     /**
@@ -179,7 +373,76 @@ public class Solver {
      * @param recvObj set of new discovered objects pointed by the variable.
      */
     private void processCall(CSVar recv, CSObj recvObj) {
-        // TODO - finish me
+        for (var stmt : recv.getVar().getInvokes()) {
+            var callee = resolveCallee(recvObj, stmt);
+            if (callee == null || callee.isStatic()) {
+                continue;
+            }
+
+            var csCallSite = csManager.getCSCallSite(recv.getContext(), stmt);
+            var calleeCtx = contextSelector.selectContext(csCallSite, recvObj, callee);
+
+            var calleeThisVar = callee.getIR().getThis();
+            /* initialize this pointer of callee */
+            workList.addEntry(
+                    csManager.getCSVar(calleeCtx, calleeThisVar),
+                    PointsToSetFactory.make(recvObj)
+            );
+
+            var csCallee = csManager.getCSMethod(calleeCtx, callee);
+            taintAnalysis.handleTaintTransfer(callee, stmt, recv.getContext(), recv);
+            handleCall(stmt, csCallSite, csCallee);
+        }
+    }
+
+
+    private void handleCall(Invoke stmt, CSCallSite callSite, CSMethod csMethod) {
+        var callEdge = new Edge<>(
+                CallGraphs.getCallKind(stmt),
+                callSite,
+                csMethod
+        );
+
+        var invokeExp = stmt.getInvokeExp();
+        if (callGraph.addEdge(callEdge)) {
+            addReachable(csMethod);
+            for (int i = 0; i < invokeExp.getArgCount(); i++) {
+                var arg = invokeExp.getArg(i);
+                var param = csMethod.getMethod().getIR().getParam(i);
+                addPFGEdge(
+                        csManager.getCSVar(callSite.getContext(), arg),
+                        csManager.getCSVar(csMethod.getContext(), param)
+                );
+            }
+
+            if (stmt.getResult() == null) {
+                return;
+            }
+
+            for (var retVar : csMethod.getMethod().getIR().getReturnVars()) {
+                addPFGEdge(
+                        csManager.getCSVar(csMethod.getContext(), retVar),
+                        csManager.getCSVar(callSite.getContext(), stmt.getResult())
+                );
+            }
+        }
+    }
+
+    private Map<String, PointsToSet> getDifferentObjSet(PointsToSet pts) {
+        var taintObjSet = PointsToSetFactory.make();
+        var heapObjSet = PointsToSetFactory.make();
+        for (var obj : pts) {
+            if (taintAnalysis.isTaintObj(obj.getObject())) {
+                taintObjSet.addObject(obj);
+            } else {
+                heapObjSet.addObject(obj);
+            }
+        }
+
+        Map<String, PointsToSet> resultMap = new HashMap<>();
+        resultMap.put("taint", taintObjSet);
+        resultMap.put("heap", heapObjSet);
+        return resultMap;
     }
 
     /**
