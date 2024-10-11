@@ -33,6 +33,8 @@ import pascal.taie.language.type.PrimitiveType;
 import pascal.taie.language.type.Type;
 import pascal.taie.util.AnalysisException;
 
+import java.util.HashSet;
+
 public class ConstantPropagation extends
         AbstractDataflowAnalysis<Stmt, CPFact> {
 
@@ -65,16 +67,14 @@ public class ConstantPropagation extends
 
     @Override
     public void meetInto(CPFact fact, CPFact target) {
-        // union facts exists in `target`
-        target.forEach((Var var, Value val_target) -> {
-            Value val_fact = fact.get(var);
-            target.update(var, meetValue(val_target, val_fact));
-        });
-        // union facts only in 'fact'
-        fact.forEach((Var var, Value val_fact) -> {
-            Value val_target = target.get(var);
-            target.update(var, meetValue(val_target, val_fact));
-        });
+        var allVars = new HashSet<>(fact.keySet());
+        allVars.addAll(target.keySet());
+
+        for (var var : allVars) {
+            var valueFromFact = fact.get(var);
+            var valueFromTarget = target.get(var);
+            target.update(var, meetValue(valueFromFact, valueFromTarget));
+        }
     }
 
     /**
