@@ -50,7 +50,6 @@ public class ConstantPropagation extends
     @Override
     public CPFact newBoundaryFact(CFG<Stmt> cfg) {
         CPFact fact = new CPFact();
-
         for (Var var : cfg.getMethod().getIR().getParams()) {
             if (canHoldInt(var)) {
                 fact.update(var, Value.getNAC());
@@ -111,8 +110,7 @@ public class ConstantPropagation extends
             RValue rVal = defStmt.getRValue();
 
             Value genValue;
-            Exp rExp = (Exp) rVal;
-            genValue = evaluate(rExp, in);
+            genValue = evaluate(rVal, in);
 
             if (canHoldInt(lVar)) {
                 in.remove(lVar);
@@ -166,7 +164,7 @@ public class ConstantPropagation extends
         } else if (exp instanceof IntLiteral tmpExp) {
             return Value.makeConstant(tmpExp.getValue());
             // x = y op z
-        } else if (exp instanceof BinaryExp tmpExp) {
+        } else if (exp instanceof BinaryExp) {
             // types of binary expression
             if (exp instanceof ArithmeticExp arithmeticExp) {
                 Var op1 = arithmeticExp.getOperand1();
@@ -195,7 +193,6 @@ public class ConstantPropagation extends
                                 return Value.getUndef();
                             }
                     }
-
                 } else if ((canHoldInt(op1) && canHoldInt(op2)) && (op1_value.isNAC() || op2_value.isNAC())) {
                     var op = arithmeticExp.getOperator();
                     if (op2_value.isConstant() && (op2_value.getConstant() == 0)) {
@@ -256,14 +253,11 @@ public class ConstantPropagation extends
                 Value op1_value = in.get(op1);
                 Value op2_value = in.get(op2);
                 if (op1_value.isConstant() && op2_value.isConstant()) {
-                    switch (shiftExp.getOperator()) {
-                        case SHL:
-                            return Value.makeConstant(op1_value.getConstant() << op2_value.getConstant());
-                        case SHR:
-                            return Value.makeConstant(op1_value.getConstant() >> op2_value.getConstant());
-                        case USHR:
-                            return Value.makeConstant(op1_value.getConstant() >>> op2_value.getConstant());
-                    }
+                    return switch (shiftExp.getOperator()) {
+                        case SHL -> Value.makeConstant(op1_value.getConstant() << op2_value.getConstant());
+                        case SHR -> Value.makeConstant(op1_value.getConstant() >> op2_value.getConstant());
+                        case USHR -> Value.makeConstant(op1_value.getConstant() >>> op2_value.getConstant());
+                    };
                 } else if (op1_value.isNAC() || op2_value.isNAC()) {
                     return Value.getNAC();
                 } else {
@@ -275,14 +269,11 @@ public class ConstantPropagation extends
                 Value op1_value = in.get(op1);
                 Value op2_value = in.get(op2);
                 if (op1_value.isConstant() && op2_value.isConstant()) {
-                    switch (bitwiseExp.getOperator()) {
-                        case AND:
-                            return Value.makeConstant(op1_value.getConstant() & op2_value.getConstant());
-                        case OR:
-                            return Value.makeConstant(op1_value.getConstant() | op2_value.getConstant());
-                        case XOR:
-                            return Value.makeConstant(op1_value.getConstant() ^ op2_value.getConstant());
-                    }
+                    return switch (bitwiseExp.getOperator()) {
+                        case AND -> Value.makeConstant(op1_value.getConstant() & op2_value.getConstant());
+                        case OR -> Value.makeConstant(op1_value.getConstant() | op2_value.getConstant());
+                        case XOR -> Value.makeConstant(op1_value.getConstant() ^ op2_value.getConstant());
+                    };
                 } else if (op1_value.isNAC() || op2_value.isNAC()) {
                     return Value.getNAC();
                 } else {

@@ -37,22 +37,17 @@ class WorkListSolver<Node, Fact> extends Solver<Node, Fact> {
 
     @Override
     protected void doSolveForward(CFG<Node> cfg, DataflowResult<Node, Fact> result) {
-        Queue<Node> workList = new LinkedList<Node>();
-        for (Node node : cfg.getNodes()) {
-            workList.add(node);
-        }
+        Queue<Node> workList = new LinkedList<>(cfg.getNodes());
 
         while (!workList.isEmpty()) {
-            Node tmpNode = workList.poll();
-            for (Node pred : cfg.getPredsOf(tmpNode)) {
-                this.analysis.meetInto(result.getOutFact(pred), result.getInFact(tmpNode));
+            Node curNode = workList.poll();
+            for (Node pred : cfg.getPredsOf(curNode)) {
+                this.analysis.meetInto(result.getOutFact(pred), result.getInFact(curNode));
             }
 
-            boolean flag = this.analysis.transferNode(tmpNode, result.getInFact(tmpNode), result.getOutFact(tmpNode));
+            boolean flag = this.analysis.transferNode(curNode, result.getInFact(curNode), result.getOutFact(curNode));
             if (flag) {
-                for (Node succ : cfg.getSuccsOf(tmpNode)) {
-                    workList.add(succ);
-                }
+                workList.addAll(cfg.getSuccsOf(curNode));
             }
         }
     }
