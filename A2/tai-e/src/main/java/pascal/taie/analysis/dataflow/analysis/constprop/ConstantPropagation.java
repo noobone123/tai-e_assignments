@@ -113,12 +113,14 @@ public class ConstantPropagation extends
             genValue = evaluate(rVal, in);
 
             if (canHoldInt(lVar)) {
+                var oldOutSize = out.keySet().size();
                 out.copyFrom(in);
-                return out.update(lVar, genValue);
+                return out.update(lVar, genValue) || out.keySet().size() != oldOutSize;
             } else {
                 // if LVar can not hold int, need to tag as Undef
+                var oldOutSize = out.keySet().size();
                 out.copyFrom(in);
-                return out.update(lVar, Value.getUndef());
+                return out.update(lVar, Value.getUndef()) || out.keySet().size() != oldOutSize;
             }
         } else {
             if (in != null)
