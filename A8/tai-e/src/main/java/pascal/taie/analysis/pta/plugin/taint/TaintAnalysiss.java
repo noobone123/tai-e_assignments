@@ -32,6 +32,7 @@ import pascal.taie.analysis.pta.core.cs.element.CSObj;
 import pascal.taie.analysis.pta.core.cs.element.CSVar;
 import pascal.taie.analysis.pta.core.heap.Obj;
 import pascal.taie.analysis.pta.cs.Solver;
+import pascal.taie.analysis.pta.pts.PointsToSetFactory;
 import pascal.taie.ir.stmt.Invoke;
 import pascal.taie.language.classes.JMethod;
 import pascal.taie.language.classes.Signatures;
@@ -84,6 +85,21 @@ public class TaintAnalysiss {
         var s = new Source(method, type);
         return config.getSources().contains(s);
     }
+
+    public void newTaintObj(Invoke stmt, Type returnType, Context ctx) {
+        var taintObj = getTaintedObj(stmt, returnType);
+        var csTaintObj = csManager.getCSObj(emptyContext, taintObj);
+        var pts = PointsToSetFactory.make(csTaintObj);
+        var lValue = stmt.getLValue();
+        if (lValue != null) {
+            solver.updateWorkList(
+                    csManager.getCSVar(ctx, lValue),
+                    pts
+            );
+        }
+    }
+
+
 
     public void handleTaintTransfer(JMethod method, Invoke invoke, Context callSiteCtx, CSVar base) {
         var transfers = sigToTransfers.get(method.getSubsignature());

@@ -230,21 +230,13 @@ public class Solver {
             var calleeCtx = contextSelector.selectContext(csCallSite, callee);
             var csCallee = csManager.getCSMethod(calleeCtx, callee);
 
-            // handling taint object
-            if (taintAnalysis.isTaintSource(callee, callee.getReturnType())) {
-                logger.info("Found Taint source: {}", callee);
-                var taintObj = taintAnalysis.getTaintedObj(stmt, callee.getReturnType());
-                var csTaintObj = csManager.getCSObj(contextSelector.getEmptyContext(), taintObj);
-                var pts = PointsToSetFactory.make(csTaintObj);
-                var lVar = stmt.getResult();
-                workList.addEntry(
-                        csManager.getCSVar(context, lVar),
-                        pts
-                );
-            }
-
-            taintAnalysis.handleTaintTransfer(callee, stmt, context, null);
             handleCall(stmt, csCallSite, csCallee);
+
+            // handle taint object and taint transfer
+            if (taintAnalysis.isTaintSource(callee, callee.getReturnType())) {
+                taintAnalysis.newTaintObj(stmt, callee.getReturnType(), context);
+            }
+            taintAnalysis.handleTaintTransfer(callee, stmt, context, null);
             return null;
         }
 
@@ -398,6 +390,7 @@ public class Solver {
 
             var csCallSite = csManager.getCSCallSite(recv.getContext(), stmt);
             var calleeCtx = contextSelector.selectContext(csCallSite, recvObj, callee);
+            var csCallee = csManager.getCSMethod(calleeCtx, callee);
 
             var calleeThisVar = callee.getIR().getThis();
             /* initialize this pointer of callee */
@@ -405,21 +398,14 @@ public class Solver {
                     csManager.getCSVar(calleeCtx, calleeThisVar),
                     PointsToSetFactory.make(recvObj)
             );
-            var csCallee = csManager.getCSMethod(calleeCtx, callee);
             handleCall(stmt, csCallSite, csCallee);
 
-            // handle taint transfer
+            // handle taint object and taint transfer
             if (taintAnalysis.isTaintSource(callee, callee.getReturnType())) {
-                var taintObj = taintAnalysis.getTaintedObj(stmt, callee.getReturnType());
-                var csTaintObj = csManager.getCSObj(contextSelector.getEmptyContext(), taintObj);
-                var pts = PointsToSetFactory.make(csTaintObj);
-                var lVar = stmt.getResult();
-                workList.addEntry(
-                        csManager.getCSVar(recv.getContext(), lVar),
-                        pts
-                );
+                taintAnalysis.newTaintObj(stmt, callee.getReturnType(), recv.getContext());
             }
             taintAnalysis.handleTaintTransfer(callee, stmt, recv.getContext(), recv);
+
         }
     }
 
@@ -491,5 +477,9 @@ public class Solver {
             result = new PointerAnalysisResultImpl(csManager, callGraph);
         }
         return result;
+    }
+
+    public void updateWorkList(CSVar var, PointsToSet pts) {
+        workList.addEntry(var, pts);
     }
 }
