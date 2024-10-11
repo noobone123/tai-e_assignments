@@ -113,14 +113,12 @@ public class ConstantPropagation extends
             genValue = evaluate(rVal, in);
 
             if (canHoldInt(lVar)) {
-                in.remove(lVar);
-                in.update(lVar, genValue);
-                return out.copyFrom(in);
+                out.copyFrom(in);
+                return out.update(lVar, genValue);
             } else {
                 // if LVar can not hold int, need to tag as Undef
-                in.remove(lVar);
-                in.update(lVar, Value.getUndef());
-                return out.copyFrom(in);
+                out.copyFrom(in);
+                return out.update(lVar, Value.getUndef());
             }
         } else {
             if (in != null)
@@ -169,33 +167,33 @@ public class ConstantPropagation extends
             if (exp instanceof ArithmeticExp arithmeticExp) {
                 Var op1 = arithmeticExp.getOperand1();
                 Var op2 = arithmeticExp.getOperand2();
-                Value op1_value = in.get(op1);
-                Value op2_value = in.get(op2);
+                Value op1Value = in.get(op1);
+                Value op2Value = in.get(op2);
 
-                if (canHoldInt(op1) && canHoldInt(op2) && op1_value.isConstant() && op2_value.isConstant()) {
+                if (canHoldInt(op1) && canHoldInt(op2) && op1Value.isConstant() && op2Value.isConstant()) {
                     switch (arithmeticExp.getOperator()) {
                         case ADD:
-                            return Value.makeConstant(op1_value.getConstant() + op2_value.getConstant());
+                            return Value.makeConstant(op1Value.getConstant() + op2Value.getConstant());
                         case SUB:
-                            return Value.makeConstant(op1_value.getConstant() - op2_value.getConstant());
+                            return Value.makeConstant(op1Value.getConstant() - op2Value.getConstant());
                         case MUL:
-                            return Value.makeConstant(op1_value.getConstant() * op2_value.getConstant());
+                            return Value.makeConstant(op1Value.getConstant() * op2Value.getConstant());
                         case DIV:
-                            if (op2_value.getConstant() != 0) {
-                                return Value.makeConstant(op1_value.getConstant() / op2_value.getConstant());
+                            if (op2Value.getConstant() != 0) {
+                                return Value.makeConstant(op1Value.getConstant() / op2Value.getConstant());
                             } else {
                                 return Value.getUndef();
                             }
                         case REM:
-                            if (op2_value.getConstant() != 0) {
-                                return Value.makeConstant(op1_value.getConstant() % op2_value.getConstant());
+                            if (op2Value.getConstant() != 0) {
+                                return Value.makeConstant(op1Value.getConstant() % op2Value.getConstant());
                             } else {
                                 return Value.getUndef();
                             }
                     }
-                } else if ((canHoldInt(op1) && canHoldInt(op2)) && (op1_value.isNAC() || op2_value.isNAC())) {
+                } else if ((canHoldInt(op1) && canHoldInt(op2)) && (op1Value.isNAC() || op2Value.isNAC())) {
                     var op = arithmeticExp.getOperator();
-                    if (op2_value.isConstant() && (op2_value.getConstant() == 0)) {
+                    if (op2Value.isConstant() && (op2Value.getConstant() == 0)) {
                         if (op == ArithmeticExp.Op.DIV || op == ArithmeticExp.Op.REM)
                             return Value.getUndef();
                     }
@@ -206,42 +204,42 @@ public class ConstantPropagation extends
             } else if (exp instanceof ConditionExp conditionExp) {
                 Var op1 = conditionExp.getOperand1();
                 Var op2 = conditionExp.getOperand2();
-                Value op1_value = in.get(op1);
-                Value op2_value = in.get(op2);
-                if (op1_value.isConstant() && op2_value.isConstant()) {
+                Value op1Value = in.get(op1);
+                Value op2Value = in.get(op2);
+                if (op1Value.isConstant() && op2Value.isConstant()) {
                     switch (conditionExp.getOperator()) {
                         case EQ:
-                            if (op1_value.getConstant() == op2_value.getConstant())
+                            if (op1Value.getConstant() == op2Value.getConstant())
                                 return Value.makeConstant(1);
                             else
                                 return Value.makeConstant(0);
                         case GE:
-                            if (op1_value.getConstant() >= op2_value.getConstant())
+                            if (op1Value.getConstant() >= op2Value.getConstant())
                                 return Value.makeConstant(1);
                             else
                                 return Value.makeConstant(0);
                         case GT:
-                            if (op1_value.getConstant() > op2_value.getConstant())
+                            if (op1Value.getConstant() > op2Value.getConstant())
                                 return Value.makeConstant(1);
                             else
                                 return Value.makeConstant(0);
                         case LE:
-                            if (op1_value.getConstant() <= op2_value.getConstant())
+                            if (op1Value.getConstant() <= op2Value.getConstant())
                                 return Value.makeConstant(1);
                             else
                                 return Value.makeConstant(0);
                         case LT:
-                            if (op1_value.getConstant() < op2_value.getConstant())
+                            if (op1Value.getConstant() < op2Value.getConstant())
                                 return Value.makeConstant(1);
                             else
                                 return Value.makeConstant(0);
                         case NE:
-                            if (op1_value.getConstant() != op2_value.getConstant())
+                            if (op1Value.getConstant() != op2Value.getConstant())
                                 return Value.makeConstant(1);
                             else
                                 return Value.makeConstant(0);
                     }
-                } else if (op1_value.isNAC() || op2_value.isNAC()) {
+                } else if (op1Value.isNAC() || op2Value.isNAC()) {
                     return Value.getNAC();
                 } else {
                     return Value.getUndef();
@@ -250,15 +248,15 @@ public class ConstantPropagation extends
             } else if (exp instanceof ShiftExp shiftExp) {
                 Var op1 = shiftExp.getOperand1();
                 Var op2 = shiftExp.getOperand2();
-                Value op1_value = in.get(op1);
-                Value op2_value = in.get(op2);
-                if (op1_value.isConstant() && op2_value.isConstant()) {
+                Value op1Value = in.get(op1);
+                Value op2Value = in.get(op2);
+                if (op1Value.isConstant() && op2Value.isConstant()) {
                     return switch (shiftExp.getOperator()) {
-                        case SHL -> Value.makeConstant(op1_value.getConstant() << op2_value.getConstant());
-                        case SHR -> Value.makeConstant(op1_value.getConstant() >> op2_value.getConstant());
-                        case USHR -> Value.makeConstant(op1_value.getConstant() >>> op2_value.getConstant());
+                        case SHL -> Value.makeConstant(op1Value.getConstant() << op2Value.getConstant());
+                        case SHR -> Value.makeConstant(op1Value.getConstant() >> op2Value.getConstant());
+                        case USHR -> Value.makeConstant(op1Value.getConstant() >>> op2Value.getConstant());
                     };
-                } else if (op1_value.isNAC() || op2_value.isNAC()) {
+                } else if (op1Value.isNAC() || op2Value.isNAC()) {
                     return Value.getNAC();
                 } else {
                     return Value.getUndef();
@@ -266,15 +264,15 @@ public class ConstantPropagation extends
             } else if (exp instanceof BitwiseExp bitwiseExp) {
                 Var op1 = bitwiseExp.getOperand1();
                 Var op2 = bitwiseExp.getOperand2();
-                Value op1_value = in.get(op1);
-                Value op2_value = in.get(op2);
-                if (op1_value.isConstant() && op2_value.isConstant()) {
+                Value op1Value = in.get(op1);
+                Value op2Value = in.get(op2);
+                if (op1Value.isConstant() && op2Value.isConstant()) {
                     return switch (bitwiseExp.getOperator()) {
-                        case AND -> Value.makeConstant(op1_value.getConstant() & op2_value.getConstant());
-                        case OR -> Value.makeConstant(op1_value.getConstant() | op2_value.getConstant());
-                        case XOR -> Value.makeConstant(op1_value.getConstant() ^ op2_value.getConstant());
+                        case AND -> Value.makeConstant(op1Value.getConstant() & op2Value.getConstant());
+                        case OR -> Value.makeConstant(op1Value.getConstant() | op2Value.getConstant());
+                        case XOR -> Value.makeConstant(op1Value.getConstant() ^ op2Value.getConstant());
                     };
-                } else if (op1_value.isNAC() || op2_value.isNAC()) {
+                } else if (op1Value.isNAC() || op2Value.isNAC()) {
                     return Value.getNAC();
                 } else {
                     return Value.getUndef();
