@@ -85,6 +85,7 @@ public class Solver {
         }
     }
 
+    record InvokeArg(Invoke invoke, int index) {}
 
     private static final Logger logger = LogManager.getLogger(Solver.class);
 
@@ -106,11 +107,14 @@ public class Solver {
 
     private PointerAnalysisResult result;
 
+    private Map<Var, Set<InvokeArg>> varToInvokeArgs;
+
     Solver(AnalysisOptions options, HeapModel heapModel,
            ContextSelector contextSelector) {
         this.options = options;
         this.heapModel = heapModel;
         this.contextSelector = contextSelector;
+        this.varToInvokeArgs = new HashMap<>();
     }
 
     public AnalysisOptions getOptions() {
@@ -213,6 +217,10 @@ public class Solver {
         }
 
         public Void visit(Invoke stmt) {
+            // update varToInvokeArgs
+            updateVarToInvokeArgs(stmt);
+
+            // handle taint transfer of static calls
             if (!stmt.isStatic()) {
                 return null;
             }
@@ -238,6 +246,14 @@ public class Solver {
             taintAnalysis.handleTaintTransfer(callee, stmt, context, null);
             handleCall(stmt, csCallSite, csCallee);
             return null;
+        }
+
+        private void updateVarToInvokeArgs(Invoke stmt) {
+            for (int i = 0; i < stmt.getInvokeExp().getArgCount(); i++) {
+                var arg = stmt.getInvokeExp().getArg(i);
+                var invokeArg = new InvokeArg(stmt, i);
+                varToInvokeArgs.computeIfAbsent(arg, k -> new HashSet<>()).add(invokeArg);
+            }
         }
     }
 
@@ -280,8 +296,7 @@ public class Solver {
 
             if (entry.pointer() instanceof CSVar csVar) {
                 var var = csVar.getVar();
-                // Taint Object is just an abstract notation, so we only need to process heap objects here.
-                // process store fields
+                // If there are new discovered heap objects, we need to process them.
                 for (var obj : heapObjSet) {
                     for (var stmt : var.getStoreFields()) {
                         var storeField = stmt.getFieldRef().resolve();
@@ -333,9 +348,8 @@ public class Solver {
      */
     private PointsToSet propagate(Pointer pointer, PointsToSet pointsToSet) {
         var deltaSet = PointsToSetFactory.make();
-        var ptSet = pointer.getPointsToSet();
         for (var obj : pointsToSet) {
-            if (ptSet.contains(obj)) {
+            if (pointer.getPointsToSet().contains(obj)) {
                 continue;
             } else {
                 deltaSet.addObject(obj);
@@ -345,7 +359,7 @@ public class Solver {
         // Propagate both heap objects and taint objects along the normal PFG edges.
         if (!deltaSet.isEmpty()) {
             for (var obj : deltaSet) {
-                ptSet.addObject(obj);
+                pointer.getPointsToSet().addObject(obj);
             }
             for (var succ : ePFG.getSuccsOf(pointer)) {
                 workList.addEntry(succ, deltaSet);
@@ -361,6 +375,9 @@ public class Solver {
     private void propagateTaintTransfer(Pointer pointer, PointsToSet taintObjSet) {
         if (!taintObjSet.isEmpty()) {
             for (var succ : ePFG.getTaintTransferSuccsOf(pointer)) {
+                for (var obj : taintObjSet) {
+                    pointer.getPointsToSet().addObject(obj);
+                }
                 workList.addEntry(succ, taintObjSet);
             }
         }
@@ -388,10 +405,21 @@ public class Solver {
                     csManager.getCSVar(calleeCtx, calleeThisVar),
                     PointsToSetFactory.make(recvObj)
             );
-
             var csCallee = csManager.getCSMethod(calleeCtx, callee);
-            taintAnalysis.handleTaintTransfer(callee, stmt, recv.getContext(), recv);
             handleCall(stmt, csCallSite, csCallee);
+
+            // handle taint transfer
+            if (taintAnalysis.isTaintSource(callee, callee.getReturnType())) {
+                var taintObj = taintAnalysis.getTaintedObj(stmt, callee.getReturnType());
+                var csTaintObj = csManager.getCSObj(contextSelector.getEmptyContext(), taintObj);
+                var pts = PointsToSetFactory.make(csTaintObj);
+                var lVar = stmt.getResult();
+                workList.addEntry(
+                        csManager.getCSVar(recv.getContext(), lVar),
+                        pts
+                );
+            }
+            taintAnalysis.handleTaintTransfer(callee, stmt, recv.getContext(), recv);
         }
     }
 

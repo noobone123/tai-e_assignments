@@ -56,6 +56,7 @@ public class TaintAnalysiss {
 
     /* Each Signature may hit multiple transfers */
     private final Map<Subsignature, Set<TaintTransfer>> sigToTransfers = new HashMap<>();
+    private final Map<Subsignature, Set<Sink>> sigToSinks = new HashMap<>();
 
     public TaintAnalysiss(Solver solver) {
         manager = new TaintManager();
@@ -71,6 +72,11 @@ public class TaintAnalysiss {
         for (var transfer : config.getTransfers()) {
             var sig = transfer.method().getSubsignature();
             sigToTransfers.computeIfAbsent(sig, k -> new HashSet<>()).add(transfer);
+        }
+
+        for (var sink : config.getSinks()) {
+            var sig = sink.method().getSubsignature();
+            sigToSinks.computeIfAbsent(sig, k -> new HashSet<>()).add(sink);
         }
     }
 
@@ -131,21 +137,21 @@ public class TaintAnalysiss {
         csCallGraph.edges().forEach(edge -> {
             var csCallSite = edge.getCallSite();
             var csCallee = edge.getCallee();
+            var callee = csCallee.getMethod();
 
-            var callerCtx = csCallSite.getContext();
-            var args = csCallSite.getCallSite().getInvokeExp().getArgs();
-            for (int i = 0; i < args.size(); i++) {
-                var arg = args.get(i);
-                var csArg = csManager.getCSVar(callerCtx, arg);
-                var pointsTo = result.getPointsToSet(csArg);
-                for (var obj : pointsTo) {
-                    if (isTaintObj(obj.getObject())) {
-                        var taintSink = new Sink(csCallee.getMethod(), i);
-                        if (config.getSinks().contains(taintSink)) {
-                            taintFlows.add(new TaintFlow(
+            if (sigToSinks.containsKey(callee.getSubsignature())) {
+                var sinks = sigToSinks.get(callee.getSubsignature());
+                for (var sink: sinks) {
+                    var var = csCallSite.getCallSite().getInvokeExp().getArg(sink.index());
+                    var csVar = csManager.getCSVar(csCallSite.getContext(), var);
+                    for (var obj: result.getPointsToSet(csVar)) {
+                        if (isTaintObj(obj.getObject())) {
+                            var taintFlow = new TaintFlow(
                                     manager.getSourceCall(obj.getObject()),
-                                    csCallSite.getCallSite(), i
-                            ));
+                                    csCallSite.getCallSite(),
+                                    sink.index()
+                            );
+                            taintFlows.add(taintFlow);
                         }
                     }
                 }
