@@ -99,8 +99,6 @@ public class TaintAnalysiss {
         }
     }
 
-
-
     public void handleTaintTransfer(JMethod method, Invoke invoke, Context callSiteCtx, CSVar base) {
         var transfers = sigToTransfers.get(method.getSubsignature());
         if (transfers == null) return;
