@@ -26,6 +26,7 @@ import pascal.taie.analysis.dataflow.fact.DataflowResult;
 import pascal.taie.analysis.graph.icfg.ICFG;
 import pascal.taie.util.collection.SetQueue;
 
+import java.util.LinkedList;
 import java.util.Queue;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -59,10 +60,51 @@ class InterSolver<Method, Node, Fact> {
     }
 
     private void initialize() {
-        // TODO - finish me
+        workList = new LinkedList<>();
+
+        for (var method: icfg.entryMethods().toList()) {
+            var entryNode = icfg.getEntryOf(method);
+            // using new boundary fact for initializing method parameters
+            result.setInFact(entryNode, analysis.newBoundaryFact(entryNode));
+            result.setOutFact(entryNode, analysis.newInitialFact());
+            workList.add(entryNode);
+        }
+
+        for (var node: icfg.getNodes()) {
+            if (result.getInFact(node) != null && result.getOutFact(node) != null) continue;
+            result.setInFact(node, analysis.newInitialFact());
+            result.setOutFact(node, analysis.newInitialFact());
+            workList.add(node);
+        }
     }
 
     private void doSolve() {
-        // TODO - finish me
+        while (!workList.isEmpty()) {
+            var curNode = workList.poll();
+            var inFact = result.getInFact(curNode);
+            var outFact = result.getOutFact(curNode);
+
+            for (var predEdge: icfg.getInEdgesOf(curNode)) {
+                var predFact = analysis.transferEdge(
+                        predEdge,
+                        result.getOutFact(predEdge.getSource())
+                );
+                analysis.meetInto(predFact, inFact);
+            }
+
+            boolean changed = analysis.transferNode(curNode, inFact, outFact);
+
+            if (changed) {
+                workList.addAll(icfg.getSuccsOf(curNode));
+            }
+        }
+    }
+
+    public void addWorkList(Node node) {
+        workList.add(node);
+    }
+
+    public DataflowResult<Node, Fact> getResult() {
+        return result;
     }
 }
