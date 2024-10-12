@@ -59,6 +59,8 @@ class Solver {
 
     private StmtProcessor stmtProcessor;
 
+    private ClassHierarchy hierarchy;
+
     Solver(HeapModel heapModel) {
         this.heapModel = heapModel;
     }
